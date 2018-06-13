@@ -1,0 +1,652 @@
+TCP/IP Stack
+
+The TCP/IP stack is built up in a number of layers each providing their own 
+functionality and abstractions. The packet of data is often constructed
+at the higher levels of the stack, working its way down to the lower layers
+where it is then sent off over the internet. Each layer appends information
+so that it can be properly decoded at the other side.
+
+Network Card
+
+The physical card which comes with the computer. E1000 is an example of
+such a card. This text will not focus on the network card, as this is
+not usually done by programmers.
+
+Device Driver
+
+The device driver maps function calls to perform the specified task for the
+given card. The section on device drivers is very dependent on the operating
+system and will be left out for this text.
+
+Ethernet layer
+
+The ethernet layer is the layer directly above the network card. It handles
+the final destination calculation as well as specifying how the data is to
+be interpreted.
+
+A ethernet packet has the following format:
+
+typedef struct _ethernet_header
+{
+    unsigned char destination[6];
+    unsigned char source[6];
+
+    uint16_t type;
+
+    unsigned char data[];
+} __attribute__((packed)) ethernet_header_t;
+
+The data link addresses are 6 octets (bytes) in length. The first bit of the
+destination address is indicating whether the address is a multicast address, 
+which represents multiple receivers on the other end. The destination is the
+address where the data is intended to arrive. The source is the address of
+the sender of the packet.
+
+The data field contains the actual payload of the packet as a sequence of
+46 to 1500 bytes.
+
+At the end of the packet there exists a frame check sequence field which
+contains a cyclic redundancy value.
+
+For sending, the packet is prepared and then sent to the network card driver
+which handles the transmitting of the packet over the network.
+
+For receiving, the network driver strips of the excess data if any and leaves
+the hands over the received packet for handling by the ethernet layer.
+
+ARP
+
+The Address Resolution Protocol is used to dynamically map MAC addresses to IPv4
+(or other protocol) addresses. This is so that a variety of L3 protocols can be
+used. You do often have the IP address of some service, but to communicate with
+other devices on the network, the MAC address is needed. ARP is used to
+broadcast and query the network for MAC addresses from each IP address owner on
+the network. For IPv6, ARP is not used. Instead a technique called Neighbor
+Discovery Protocol is used. Address resoution is the process of discovering the
+mapping from one address to another. For the TCP/IP protocol using IPv4, this is
+done by running ARP.
+
+It is position somewhere between layer two and three in the network stack, since
+it handles the translation of the network addresses.
+
+An example taken from TCP/IP Illustrated
+
+This example follows a IP datagram with focus on the ARP.
+
+1. The application, a web browser, calls a special function to parse the URL to
+see if it contains a host name. It does not, so the application uses the 32-bit
+IPv4 address 10.0.0.1.
+
+2. The application asks the TCP protocol to establish a connection with
+10.0.0.1.
+
+3. TCP attempts to send a connection request segment to the remote host by
+sending an IPv4 datagram to 10.0.0.1.
+
+4. Because we are assuming that the address 10.0.0.1 is using the same network
+prefix as our sending host, the datagram can be sent directly to that address
+without going through a router.
+
+5. Assuming that Ethernet-compatible addressing is being used on the IPv4
+subnet, the sending host must convert the 32-bit IPv4 destination address into a
+48-bit Ethernet-style address. Using the terminology from [RFC0826], a
+translation is required from the logical Internet address to its corresponding
+physical hardware address. This is the function of the ARP. ARP works in its
+normal form only for broadcast networks, where the link layer is able to deliver
+a single message to all attached network devices. This is an important
+requirement imposed by the operation of ARP. On non-broadcast networks, other,
+more complex mapping protocols may be required.
+
+6. ARP sends an Ethernet frame called an ARP request to every host on the shared
+link-layer segment. This is called a link-layer broadcast. The ARP request
+contains the IPv4 address of the destination host (10.0.0.1) and seeks an answer
+to the following question: "If you are configured with IPv4 address 10.0.0.1 as
+one of your own, please respond to me with your MAC address."
+
+7. With ARP, all systems in the same broadcast domain receive ARP requests. This
+includes systems that may not be running the IPv4 or IPv6 protocols at all but
+does not include systems on different VLANs, if they are supported. Provided
+there exists an attached system using the IPv4 address specified in the request,
+it alone responds with an ARP reply. This reply contains the IPv4 address and
+the corresponding MAC address. The reply does not ordinally use broadcast but is
+directed only to the sender. The host receiving the ARP request also learns of
+the sender's IPv4-to-MAC address mapping at this time and records it in memory
+for later use.
+
+8. The ARP reply is then received by the original sender of the request, and the
+datagram that forced the ARP request/reply to be exchanged can now be sent.
+
+9. The sender now sends the datagram directly to the destination host by
+encapsulating it in an Ethernet frame and using the Ethernet address learned by
+the ARP exchange as the destination Ethernet address. Because the Ethernet
+address refers only to the correct destination host, no other hosts or routers
+receive the datagram. Thus, when only direct delivery is used, no router is
+required.
+
+The ARP frame format is described below in a C-struct.
+
+typedef struct _arp_frame
+{
+    uint16_t hardware_type;
+    uint16_t protocol_type;
+    
+    uint8_t hardware_size;
+    uint8_t protocol_size;
+
+    uint16_t opcode;
+
+    char send_mac[6];
+    uint32_t send_prot_addr;
+    
+    char dest_mac[6];
+    uint32_t dest_prot_addr;
+} __attribute__((packed)) arp_frame_t;
+
+The addresses may vary in size depending on which protocol is used for the
+address. The first 8 bytes is fixed in size for all arp frames. The packet also
+includes a few bytes of padding to ensure that the packet has the correct size
+for the ethernet frame. As stated above, the payload of an ethernet packet has
+to be atleast 46 bytes long. The hardware_size and protocol_size fields describe
+the length of the hardware and protocol addresses. For IPv4, they are 6 and 4,
+respectively. 
+
+The Internet Protocol (IP)
+
+IP is the workhorse of protocol of the TCP/IP protocol suite. All TCP, UDP,
+ICMP, and IGMP data gets transmitted as IP datagram. IP provides a best-effort,
+connection-less datagram delivery service. By "best-effort" we mean there is no
+guarantees that an IP datagram gets to its destination successfully. Although IP
+does not simply drop all traffic unnecessarily, it provides no guarantees as to
+the fate of the packets it attempts to deliver. When something goes wrong, such
+as a router temporarily running out of buffers, IP has a simple error-handling
+algorithm: throw away some data(usually the last datagram that arrived). Any
+required reliability must be provided by the upper layers. IPv4 and IPv6 both
+use this basic best-effort delivery model.
+
+typedef struct _ipv4_header
+{
+    uint8_t version : 4;
+    uint8_t ihl : 4;
+
+    uint8_t tos;
+
+    uint16_t total_length;
+    uint16_t identification;
+    
+    uint16_t flags : 3;
+    uint16_t frag_offset : 13;
+
+    uint8_t ttl;
+    uint8_t protocol;
+    
+    uint16_t header_checksum;
+
+    uint32_t sender_addr;
+    uint32_t dest_addr;
+
+    uint8_t options[];
+    
+} __attribute__((packed)) ipv4_header_t;
+
+typedef struct _ipv6_header
+{
+    uint32_t version : 4;
+    uint32_t DSField : 6;
+    uint32_t ECN : 2;
+    uint32_t flow_label;
+
+    uint16_t payload_length;
+    uint8_t next_header;
+    uint8_t hop_limit;
+
+    uint8_t send_addr[16];
+    uint8_t dest_addr[16];    
+} __attribute__((packed)) ipv6_header_t;
+
+The normal size of the IPv4 header is 20 bytes, unless options are present. The
+IPv6 header is twice as large but never has any options. It may however have
+extension headers. The first field is the Version field. It contains the version
+number of the IP datagram: 4 for IPv4 and 6 for IPv6. The headers for both IPv4
+and IPv6 share the location of the version field but no other. The protocol is
+thus not interoperable. A host must handle either IPv4 or IPv6 separately. If a
+host is handling both protocols, it is called a dual stack. There exists other
+protocols than IPv4 and IPv6 but they are not used to any significant extent.
+This field is followed by a number of different fields describing the packet and
+its interpretation. One notable field is the total length field in the IPv4
+header and the corresponding payload length field in the IPv6 header. The
+protocol field in the IPv4 header describes the protocol used in the payload.
+Some notable values are 17 (for UDP) and 6 (for TCP). This demultiplexing allows
+one header to prefix multiple types of payload data. The IPv6 generalization is
+the next header field, which describes the type of the next header in the
+payload data.
+
+System Configuration.
+
+To make use of the TCP/IP protocol suite, each host and router requires a
+certain amount of configuration information. Configuraion information is used to
+assign local names to systems, and identifiers (such as IP addresses) to
+interfaces. It is also used to either provide or make use of various network
+services, such as the Domain Name System (DNS) and Mobile IP home agents. Over
+the years there have been many ways of providing and obtaining this information,
+but fundamentally there are three approaches: type in the information by hand,
+have a system obtain it using a network service, or use some sort of algorithm
+to automatically determine it. We shall explore each of these options and see
+how they are used with both IPv4 and IPv6. Understanding how configuration works
+is important, because it is one of the issues that every system administrator
+and nearly every end user must deal with to some extent. Every interface to be
+used with TCP/IP networking requires an IP address, subnet mask and a broadcast
+address (for IPv4). The broadcast address can ordinally be determined using the
+address and mask. With this minimal information, it is generally possible to
+carry out communication with other systems on the same subnetwork. To engage in
+communication beyond the local subnet, called indirect delivery, a system
+requires a routing or forwarding table that indicates what router(s) are to be
+used for reaching various destinations. To be able to use services such as the
+Web and e-mail, the DNS is used to map user-friendly domain names to the IP
+addresses required by the lower protocol layers. Because the DNS is a
+distributed service, any system making use of it must know how to reach at least
+one DNS server. All in all, having an IP address, subnet mask, and the IP
+address of a DNS server and router are the "bare essentials" to get a system
+running on the Internet that is capable of using or providing popular services
+such as Web and e-mail. To use Mobile IP, a system also needs to know how to
+find a home agent.
+
+Dynamic Host Configuration Protocol (DHCP)
+
+DHCP is a popular client/server protocol used to assign configuration
+information to hosts (and, less frequently, to routers). DHCP is very widely
+used, in both enterprises and home network. Even the most basic home router
+devices support embedded DHCP servers. DHCP clients are incorporated into all
+common client operating systems and a large number of embedded devices such as
+network printers and VoIP phones. Such devices usually use DHCP to acquire their
+IP address, subnet mask, router IP address and DNS server IP address.
+Information pertaining to other services may also be conveyed using DHCP. DHCP
+was originally conceived for use with IPv4, so references to it or its
+relationship with IP in this chapter will refer to IPv4 unless otherwise
+specified. IPv6 can also use a version of DHCP called DHCPv6, which will be
+discussed later.
+
+/*
+ * Type representing one DHCP message
+ */
+typedef struct _dhcp_message
+{
+    /*
+     * Operation
+     */
+    uint8_t op;
+    
+    /*
+     * Hardware address type
+     */
+    uint8_t htype;
+
+    /*
+     * Hardware address length
+     */
+    uint8_t hlen;
+
+    /*
+     * Number of relays the message have passed.
+     */
+    uint8_t hops;
+
+    /*
+     * Transaction ID
+     */
+    uint32_t xid;
+    
+    /*
+     * Seconds since first attempt to establish or renew address.
+     */
+    uint16_t secs;
+    
+    /*
+     * Flags field. Contains only broadcast flag.
+     */
+    uint16_t flags;
+
+    /*
+     * Client IP Address
+     */
+    uint32_t ciaddr;
+
+    /*
+     * Your IP Address
+     */
+    uint32_t yiaddr;
+
+    /*
+     * Next Server IP Address
+     */
+    uint32_t siaddr;
+
+    /*
+     * Gateway IP Address
+     */
+    uint32_t giaddr;
+
+    /*
+     * Client Hardware Address
+     */    
+    uint32_t chaddr[4];
+
+    /*
+     * Server Name
+     */
+    char sname[64];
+
+    /*
+     * Boot File Name
+     */
+    char file[128];
+
+    /*
+     * Variable sized options field.
+     */
+    uint8_t options[];
+
+} __attribute__((packed)) dhcp_message_t;
+
+Firewalls and Network Address Translation (NAT)
+
+During the early years of the Internet and its protocols, most network designers
+and developers were from universities or other entities engaged in research.
+These researches were generally friendly and cooperative, and the Internet
+system was not especially resilient to attack, but not many people were
+interested in attacking it either. By the late 1980s and especially the early to
+mid-1990s the Internet had gained the interest of the mass population and
+ultimately people interested in compromising its security. Successful attacks
+became commonplace, and many problems were caused by bugs or unplanned protocol
+operations in the software implementations of Internet hosts. Because some sites
+had large number of end systems with various versions of operating system
+software, it became very difficult for system administrators to ensure that all
+the various bugs in these end systems had been fixed. Fixing the problem would
+have required a way to control the Internet traffic to which the end hosts were
+exposed. Today, this is provided by a firewall, which is a router that restricts
+the type of traffic it forwards. As firewalls were being deployed to protect
+enterprises, another problem was becoming important: the number of available
+IPv4 addresses was diminishing, with a threat of exhaustion. Something would
+have to be done with the way addresses were allocated and used. One of the most
+important mechanisms devleoped to deal with this, aside from IPv6, is called
+Network Address Translation (NAT). With NAT, Internet addresses need not be
+globally unique, and as a consequence they can be reused in different parts of
+the Internet, called address realms. Allowing the same addresses to be reused in
+multiple realms greatly eased the problem of address exhaustion. As we shall
+see, NAT can also be synergistically combined with firewalls to produce
+combination devices that have become the most popular types of routers used to
+connect end users, including home networks and small enterprises, to the
+Internet. We shall now explore both firewalls and NATs in further detail.
+
+Firewalls
+
+Given the enormous management problems associated with trying to keep end
+system software up-to-date and bug-free, the focus of resisting attacks expanded
+from securing end systems to restricting the Internet traffic allowed to flow to
+end systems by filtering out some traffic using firewalls. Today, firewalls are
+common, and several different types have evolved. The two major types of
+firewalls commonly used include proxy firewalls and packet-filtering firewalls.
+The main difference between them is the layer in the protocol stacl at which
+they operate, and conseqeuently the way IP addresses and port numbers are used.
+The packet-filtering firewall is an Internet router that drops datagrams that
+fail to meet specific criteria. The proxy firewall operates as a multihomed
+server host from the viewpoint of an Internet client. That is, it is the
+endpoint of TCP and UDP transport associations; it does not typically route IP
+datagrams at the IP protocol layer.
+
+ICMPv4 and ICMPv6: Internet Control Message Protocol
+
+The IP protocol alone provides no direct way for an end system to learn the fate
+of IP packets that fail to make it to their destinations. In addition, IP
+provides no direct way of obtaining diagnostic information. To address these
+deficiencies, a special protocol called the Internet Control Message Protocol is
+used in conjuction with IP to provide diagnostics and control information
+related to the configuration of the IP protocol layer and the disposition of IP
+packets. ICMP is often considered part of the IP layer itself, and is required
+to be present with any IP implementation. It uses IP protocol for transport. So,
+precisely, it is neither a network nor a transport protocol but lies somewhere
+between the two. ICMP provides for the delivery of error and control messages
+that may require attention. ICMP messages are usually acted on by the IP layer
+itself, by higher-level transport protocols (e.g. TCP and UDP), and in some
+cases by the user application. Note that ICMP does not provide reliability for
+IP. Rather, it indicates certain classes of failures and configuration
+information. The most common cause of packet drops does not elicit any ICMP
+information. Other protocols, such as TCP, handle such situations. 
+
+ICMP Messages
+
+We now look at ICMP messages in general and the most commonly used ones in more
+detail. ICMP messages are grouped into two major categories: those messages
+relating to problems with delivering IP datagrams, and those related to
+information gathering and configuration.
+
+TODO: Expand on IMCP Information and Error messages.
+TODO: Expand on Neighbor Discovery in IPv6
+
+User Datagram Protocol (UDP)
+
+UDP is a simple, datagram-oriented, transport-layer protocol that preserved
+message boundaries. It does not provide error correction, sequencing, duplicate
+elimination, flow control, or congestion control. It can provide error
+detection, andd it includes the first true end-to-end checksum at the transport
+layer that we have encountered. This protocol provides minimal functionality
+itself, so applications using it have a great deal of control over how packets
+are sent and processed. Applications wishing to ensure that their data is
+reliably delivered or sequenced must implement these protections themselves.
+Generally, each UDP output operation requested by an application produces
+exactly one UDP datagram, which causes one IP datagram to be sent. This is in
+contrast to a stream-oriented protocol such as TCP, where the amount of data
+written by an application may have little relationship to what actually gets
+sent in a single IP datagram or what is consumed at the receiver. [RFC0768] is
+the official specification of UDP, and it has remained as a standard without
+significant revisions for more than 30 years. As mentioned, UDP provides no
+error correction: it sends the datagrams that the application writes to the IP
+layer, but there is no protocol mechanism to prevent high-rate UDP traffic from
+negatively impacting other network users. Given this lack of reliability and
+protection, we might be tempted to conclude that there are no benefits to using
+UDP at all. This is not true, however. Because of its connectionless character,
+it has less overhead than other transport protocols. In addition, broadcast and
+multicast operations are much more straightforward using a connectionless
+transport such as UDP. Finally, the ability of an application to choose its own
+unit of retransmission can be an important consideration.
+
+UDP Header
+
+The UDP header is shown below.
+
+typedef struct _udp_header
+{
+    uint16_t source_port;
+    uint16_t dest_port;
+    uint16_t length;
+    uint16_t checksum;
+
+    unsigned char data[];
+} __attribute__((packed)) udp_header;
+
+Port number acts as mailboxes and help a protocol impementation identify the
+sending and receiving processes. They are purely abstract - they do not
+correspond to any physical entity on a host. In UDP; port numbers are positive
+16-bit numbers, and the source port number is optional; it may be set to 0 if
+the sender of the datagram never requires a reply. Transport protocols such as
+TCP, UDP, and SCTP use the destination port number to help demultiplex incoming
+data from IP. Because IP demultiplexes the incoming IP datagram to a particular
+transport protocol based on the value of the Protocol field in the IPv4 header
+or Next Header in the IPv6 header, this means that the port numbers can be made
+independent among the transport protocol. That is, TCP port numbers are used
+only by TCP, and the UDP port numbers only by UDP, and so on. A straightforward
+consequence of this separation is that two completely distinct servers can use
+the same port number and IP address, as long as they use different transport
+protocols. The UDP length field is the length of the UDP header and the UDP data
+in bytes. The minimum value for this field is 8 except when UDP is used with
+IPv6 jumbograms. Sending a UDP datagram with 0 bytes of data is acceptable,
+although rare. Note that the UDP length field is redundant; the IPv4 header
+contains the datagram's total length, and the IPv6 header contains the payload
+data. The UDP lenght field should match the length computed from the IP-layer
+information. 
+
+TODO: Explore UDP Checksum
+TODO: Explore IP Fragmentation.
+
+Name Resolution and the Domain Name System (DNS)
+
+The protocols we have studied so far operate using IP addresses to identify the
+hosts that participate in a distributed application. These addresses are
+cumbersome for humans to use and remember, so the Internet supports the use of
+host names to identify hosts, both clients and servers. In order to be used by
+protocols such as TCP and IP, host names are converted into IP addresses using a
+process known as name resolution. There are different forms of name resolution
+in the Internet, but the most prevalent and important one uses a distributed
+database system known as the Domain Name System (DNS). DNS runs as an
+application on the Internet, using IPv4 and IPv6. For scalability, DNS names are
+hierarchical, as are the servers that support name resolution.
+
+DNS is a distributed client/server networked database that is used by TCP/IP
+applications to map between host names and IP addresses (and vice versa), to
+provide electronic mail routing information, service naming, and other
+capabilities. We use the term distributed because no single site on the Internet
+knows all of the information. Each site (university department, campus, company,
+or department within a company, for example) maintains its own database of
+information and runs a server program that other systems across the Internet
+(clients) can query. The DNS provides the protocol that allows clients and
+servers to communicate with each other and also a protocol for allowing servers
+to exchange information. From an application's point of view, access to the DNS
+is through an application library called a resolver. In general, an application
+must convert a host name to an IPv4 or IPv6 address before it can ask TCP to
+open a connection or send a unicast datagram using UDP. The TCP and IP protocol
+implementations know nothing about the DNS; they operate only with the
+addresses. 
+
+The Transmission Control Protocol (TCP) 
+
+So far we have been discussing protocols that do not include their own mechanism
+for delivering data reliably. They may detect that erroneous data has been
+received, using a mathematical function such as a checksum or CRC, but they do
+not try very hard to repair errors. With IP and UDP, no error repair is done at
+all. With Ethernet and other protocols based on it, the protocol provides some
+number of retries and then gives up if it cannot succeed. The problem of
+communicating in environments where the communication medium may lose or alter
+the messages being delivered has been studied for years. Some of the most
+important theoretical work on the topic was developed by Claude Shannon in 1948.
+This work, which popularized the term bit and became the foundation of the field
+of information theory, helps us understand the fundamental limits on the amount
+of information that can be moved across an information channel that is lossy.
+Information theory is closely related to the field of coding theory, which
+provides ways of encoding information so that it is as reslilient as possible to
+errors in the communications channel. Using error-correcting codes to correct
+communications problems is one very important method for handling errors.
+Another is to simply "try sending again" until the information is finally
+received. This approach, called Automatic Repeat Request (ARQ), forms the basis
+for many communication protocols, including TCP.
+
+TCP Header
+
+The header itself is considerably more complicated than the header we saw for
+UDP above. This is not very surprising, as TCP is a significantly more
+complicated protocol that must keep each end of the connection informed about
+the current state. It is shown below.
+
+typedef struct _tcp_header
+{
+    uint16_t source_port;
+    uint16_t dest_port;
+
+    uint32_t seq_num;
+
+    uint32_t ack_num;
+
+    uint16_t header_length : 4;
+    uint16_t res : 4;
+    uint16_t CWR : 1;
+    uint16_t ECE : 1;
+    uint16_t UGR : 1;
+    uint16_t ACK : 1;
+    uint16_t PSH : 1;
+    uint16_t RST : 1;
+    uint16_t SYN : 1;
+    uint16_t FIN : 1;
+    
+    uint16_t window_size;
+    
+    uint16_t tcp_checksum;
+    uint16_t urgent_ptr;
+
+    uint8_t options[];
+
+} __attribute__((packed)) tcp_header_t;
+
+Each TCP header contains the source and destination port number. These two
+values, along with the source and destination IP address in the IP header,
+uniquely identify each connection. The combination of an IP address and a port
+number is sometimes known as an endpoint or socket in the TCP literature. The
+latter term appeared in [RFC0793] and was ultimately adopted as the name of the
+Berkeley-derived programming interface for network communications. It is a pair
+of sockets or endpoints that uniquely identifies each TCP connection. This fact
+will become important when we look at how a TCP server can communicate with
+multiple clients. The seqeuence number field identifies the byte in the stream
+of data from the sending TCP to the receiving TCP that the first byte of data in
+the containing segment represents. If we consider the stream of bytes flowing in
+one direction between two applications, TCP numbers each byte with a sequence
+number. This sequence number is a 32-bit unsigned number that wraps back around
+to 0 after reaching 2^32 - 1. Because every byte exchanged is numbered, the
+acknowledgement number field contains the next sequence number that the sender
+of the acknowledgement expects to receive. This is therefore the sequence number
+of the last successfully receive byte of data plus 1. This field is valid only
+if the ACK bit field is on, which is usually for all but initial and closing
+segments. Sending an ACK costs nothing more than sending any other TCP segments
+because the 32-bit ACK number field is always part of the header, as is the ACK
+bit field. When a new connection is being established, the SYN bit field is
+turned on in the first segment sent from client to server. Such segments are
+called SYN segmenents, or simply SYNs. The sequence number field then contains
+the first sequence number to be used on that direction of the connection for
+subsequent sequence numbers and in returning ACK numbers. Note that this number
+is not 0 or 1 but instead is another number, often randomly chosen, called
+initial sequence number (ISN). The reason for the ISN not being 0 or 1 is a
+security measure and will be discussed later. The sequence number of the first
+byte of data sent on this direction of the connection is the ISN plus 1, because
+the SYN bit field consumes one sequence number. A we shall see later, consuming
+a sequence number also implies reliable delivery using retransmission. Thus,
+SYNs and application bytes are reliably delivered. ACKs, which do not consume
+sequence numbers, are not. TCP can be described as "a sliding window protocol
+with cumulative positive acknowledgements." The ACK number field is constructed
+to indicate the largest byte received in order at the receiver (plus 1). For
+example, if bytes 1-1024 are received OK, and the next segmentcontains bytes
+2049-3072, the receiver cannor use the regular ACK number field to signal the
+sender that it received this new segment. Modern TCPs, howeverm have a selective
+acknowledgement (SACK) option that allows the receiver to indicate to the sender
+out-of-order data it has received correctly. When paired with a TCP sender
+capable of selective repeat, a significant performance benefit may be realized.
+The header length field gives the length of the header in 32-bit words. This is
+required because the length of the options field is variable. With a four-bit
+field, TCP is limited to a 60 byte header. Without options, however, the size is
+20 bytes. Currently eight bit fields are defined for the TCP header, although
+some older implementations understand only the last six of them. One or more of
+them can be turned on at the same time. An explanation of the bits can be found
+below. 
+
+1. CWR Congestion Window Reduced.
+2. ECE ECN Echo
+3. URG Urgent
+4. ACK Acknowledgement
+5. PSH Push
+6. RST Reset the connection.
+7. SYN Synchronize sequence numbers to initiate a connection.
+8. FIN The sender of the segment is finished sending data to its peer.
+
+TCP's flow control is provided by each end advertising a window size using the
+window size field. This is the number of bytes, starting with the one specified
+by the ACK number, that the receiver is willing to accept. This is a 16-bit
+field, limiting the window to 65,535 bytes, and thereby limiting TCP's
+throughput performance. The TCP checksum field covers the TCP header and data
+and some fields in the IP header, using a pseudo-header computation similar to
+the one used with ICMPv6 and UDP. It is mandatory for this field to be
+calculated and stored by the sender, and then verified by the receiver. The TCP
+checksum is calculated with the same algorithm as the IP, ICMP, and UDP
+checksums.
+
+
+TODO: TCP Connection Management
+TODO: TCP Timeout and Retransmission
+TODO: TCP Data Flow and Window Management
+TODO: TCP Keepalive
+
+Sockets and inet interface
